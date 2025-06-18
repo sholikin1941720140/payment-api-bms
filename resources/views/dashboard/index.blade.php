@@ -155,7 +155,7 @@
                     }
                 });
             });
-        
+
             function updateStatusIndicators(paymentId, status, paymentData) {
                 var row = $('[data-id="' + paymentId + '"]').closest('tr');
 
