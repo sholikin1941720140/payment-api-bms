@@ -23,17 +23,40 @@ class PaymentController extends Controller
                 return response()->json(['error' => 'Amount must be positive'], 400);
             }
 
-            try {
-                $expiredDate = Carbon::parse(urldecode($expired));
-                if ($expiredDate->isPast()) {
-                    return response()->json(['error' => 'Expired date must be in the future'], 400);
-                }
-            } catch (\Exception $e) {
-                return response()->json(['error' => 'Invalid expired date format'], 400);
+            $check = Payment::where('reff', $reff)->first();
+            if ($check) {
+                return response()->json(['error' => 'Reff already exists'], 403);
             }
 
-            $originalAmount = $amount;
-            $totalAmount = $amount + 2500;
+            try {
+                $decodedExpired = str_replace(' ', '+', $expired);
+
+                $expiredDate = Carbon::parse($decodedExpired);
+                $now = Carbon::now();
+
+                if ($expiredDate->lte($now)) {
+                    return response()->json([
+                        'error' => 'Expired date must be in the future',
+                        'current_time' => $now->toISOString(),
+                        'expired_time' => $expiredDate->toISOString(),
+                        'timezone_info' => [
+                            'current_tz' => $now->getTimezone()->getName(),
+                            'expired_tz' => $expiredDate->getTimezone()->getName()
+                        ]
+                    ], 400);
+                }
+            } catch (\Exception $e) {
+                return response()->json([
+                    'error' => 'Invalid expired date format',
+                    'received' => $expired,
+                    'decoded' => urldecode($expired ?? ''),
+                    'expected_format' => 'e.g. 2025-07-28T09:12:48+07:00',
+                    'debug' => $e->getMessage()
+                ], 400);
+            }
+
+            $originalAmount = (int) $amount;
+            $totalAmount = $originalAmount + 2500;
             $code = '8834' . $hp;
 
             $payment = Payment::create([
@@ -48,13 +71,13 @@ class PaymentController extends Controller
             ]);
 
             return response()->json([
-                'amount' => (string)$totalAmount,
+                'amount' => (string) $totalAmount,
                 'reff' => $reff,
-                'expired' => $expiredDate->format('c'),
+                'expired' => $expiredDate->toISOString(),
                 'name' => $name,
                 'code' => $code
             ]);
-
+    
         } catch (\Exception $e) {
             return response()->json(['error' => 'Internal server error'], 500);
         }
@@ -64,20 +87,25 @@ class PaymentController extends Controller
     {
         try {
             $reff = $request->get('reff');
-            
             $payment = Payment::where('reff', $reff)->first();
 
             if (!$payment) {
                 return response()->json(['error' => 'Payment not found'], 403);
             }
 
-            // Cek apakah sudah expired
+            if ($payment->status === 'paid') {
+                return response()->json(['error' => 'Payment already processed'], 403);
+            }
+
+            if ($payment->status === 'expired') {
+                return response()->json(['error' => 'Payment already exists with expired status'], 403);
+            }
+
             if ($payment->isExpired()) {
                 $payment->update(['status' => 'expired']);
-                
-                // Dispatch job untuk backup
+
                 ProcessTransactionBackup::dispatch($payment);
-                
+
                 return response()->json([
                     'amount' => (string)$payment->amount,
                     'reff' => $payment->reff,
@@ -87,18 +115,11 @@ class PaymentController extends Controller
                 ]);
             }
 
-            // Cek apakah sudah dibayar (double payment)
-            if ($payment->status === 'paid') {
-                return response()->json(['error' => 'Payment already processed'], 403);
-            }
-
-            // Update status menjadi paid
             $payment->update([
                 'status' => 'paid',
                 'paid_at' => Carbon::now()
             ]);
 
-            // Dispatch job untuk backup
             ProcessTransactionBackup::dispatch($payment);
 
             return response()->json([
@@ -118,7 +139,6 @@ class PaymentController extends Controller
     {
         try {
             $reff = $request->get('reff');
-            
             $payment = Payment::where('reff', $reff)->first();
 
             if (!$payment) {
@@ -130,6 +150,7 @@ class PaymentController extends Controller
                 'reff' => $payment->reff,
                 'name' => $payment->name,
                 'expired' => $payment->expired->format('c'),
+                'paid' => $payment->paid_at ? $payment->paid_at->format('c') : null,
                 'code' => $payment->code,
                 'status' => $payment->status
             ];

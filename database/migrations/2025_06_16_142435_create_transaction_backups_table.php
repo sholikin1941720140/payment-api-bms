@@ -11,7 +11,7 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('transactions', function (Blueprint $table) {
+        Schema::create('transaction_backups', function (Blueprint $table) {
             $table->id();
             $table->string('reff');
             $table->decimal('amount', 15, 2);
